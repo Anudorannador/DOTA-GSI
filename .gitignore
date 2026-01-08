@@ -1,0 +1,19 @@
+# Root ignore rules (whitelist mode)
+# Only track the two project folders in this repo.
+
+# Ignore everything by default
+*
+
+# Keep this ignore file
+!/.gitignore
+
+# Keep basic repository metadata
+!/README.md
+!/LICENSE
+
+# Allow only these two projects
+!/dota-gsi-server/
+!/dota-gsi-server/**
+
+!/dota-gsi-web/
+!/dota-gsi-web/**
