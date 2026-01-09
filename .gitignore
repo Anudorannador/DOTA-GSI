@@ -10,6 +10,7 @@
 # Keep basic repository metadata
 !/README.md
 !/LICENSE
+!/.gitattributes
 
 # Allow only these two projects
 !/dota-gsi-server/
@@ -17,3 +18,6 @@
 
 !/dota-gsi-web/
 !/dota-gsi-web/**
+
+!/assets/
+!/assets/**
