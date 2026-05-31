@@ -75,10 +75,10 @@ Important:
 
 ## Patch compatibility (Dota 2 7.41)
 
-- **Facets (命石) were removed from the game in 7.41.** The dashboard never
+- **Facets were removed from the game in 7.41.** The dashboard never
   rendered facets, so nothing changes; the GSI still emits a vestigial
   `hero.facet` field (always `0`), which is ignored.
-- **Neutral items** still use the Madstone (狂石) crafting system. Since 7.41,
+- **Neutral items** still use the Madstone crafting system. Since 7.41,
   Enchantment options depend on the hero's primary attribute (no longer random)
   and tiers 2-5 offer 5 choices instead of 4. The crafted result is still one
   Artifact + one Enchantment, which the dashboard reads from the

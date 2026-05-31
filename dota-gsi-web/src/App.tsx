@@ -232,8 +232,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       const alive = asBoolean(hero?.alive)
       const respawnSeconds = asNumber(hero?.respawn_seconds)
 
-      // Talent picks: hero.talent_1..talent_8 booleans.
-      // Mapping (Dota GSI): 1/2 = lvl10, 3/4 = lvl15, 5/6 = lvl20, 7/8 = lvl25; odd = left, even = right.
+      // hero.talent_1..talent_8 booleans (index 0 = talent_1).
       const talents = Array.from({ length: 8 }, (_, i) => asBoolean(hero?.[`talent_${i + 1}`]) ?? false)
 
       const itemsPlayer = asObject(itemsTeam?.[playerKey])

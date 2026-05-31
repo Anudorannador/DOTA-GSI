@@ -3,7 +3,7 @@
  * Displays hero portrait, level, HP/MP bars, abilities, TP, items, and neutral crafting.
  */
 
-import { useId } from 'react'
+import { memo, useId } from 'react'
 import { useHeroImageUrl } from '../hooks/useHeroImageUrl'
 import { useItemImageUrl, formatItemFallbackLabel } from '../hooks/useItemImageUrl'
 import { useAbilityImageUrl } from '../hooks/useAbilityImageUrl'
@@ -283,23 +283,15 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
 }
 
 /**
- * Compact talent tree: 4 tiers stacked vertically (lvl 25 on top, lvl 10 at
- * bottom, matching the in-game tree). Each tier has a left + right pill plus a
- * central level node (10/15/20/25). A picked side lights up gold; the level
- * node lights once that tier has any pick.
- *
- * Per Dota rules a tier normally has only one side picked, but at levels 26-30
- * the other side gets backfilled (lvl 30 = all gold). Since left/right are
- * independent booleans, both pills simply light when both are true.
- *
- * GSI talent mapping: talent_1/2 = lvl10, 3/4 = lvl15, 5/6 = lvl20, 7/8 = lvl25;
- * odd index = left, even index = right. The tree is NOT mirrored on Dire - only
- * the surrounding layout flips.
+ * Compact talent tree: 4 tiers (lvl 25 top -> lvl 10 bottom) with a central
+ * level node and left/right pills. A picked side lights gold; both sides can
+ * light at once (lvl 26-30 backfill / full lvl 30). The tree is never mirrored;
+ * only the surrounding layout flips.
  */
-function TalentTree(props: { talents: boolean[] }) {
+const TalentTree = memo(function TalentTree(props: { talents: boolean[] }) {
   const t = props.talents
   const at = (i: number) => t[i] === true
-  // Top (lvl25) -> bottom (lvl10).
+  // Tiers top (lvl25) -> bottom (lvl10); left/right are that tier's two talent booleans.
   const tiers = [
     { level: 25, left: at(6), right: at(7) },
     { level: 20, left: at(4), right: at(5) },
@@ -350,16 +342,14 @@ function TalentTree(props: { talents: boolean[] }) {
           strokeWidth={2.5}
         />
 
-        {tiers.map((tier) => {
-          const y = tier.level === 25 ? rowYs[0] : tier.level === 20 ? rowYs[1] : tier.level === 15 ? rowYs[2] : rowYs[3]
+        {tiers.map((tier, i) => {
+          const y = rowYs[i]
           const active = tier.left || tier.right
           const rx = W - pillW
           return (
             <g key={tier.level}>
-              {/* connectors center <-> pills */}
               <line x1={pillW} y1={y} x2={CX - nodeR} y2={y} stroke="#475062" strokeOpacity={0.5} strokeWidth={1.5} />
               <line x1={CX + nodeR} y1={y} x2={rx} y2={y} stroke="#475062" strokeOpacity={0.5} strokeWidth={1.5} />
-              {/* left pill */}
               <rect
                 x={0}
                 y={y - pillH / 2}
@@ -371,7 +361,6 @@ function TalentTree(props: { talents: boolean[] }) {
                 strokeWidth={1}
                 filter={tier.left ? `url(#${glowId})` : undefined}
               />
-              {/* right pill */}
               <rect
                 x={rx}
                 y={y - pillH / 2}
@@ -383,7 +372,6 @@ function TalentTree(props: { talents: boolean[] }) {
                 strokeWidth={1}
                 filter={tier.right ? `url(#${glowId})` : undefined}
               />
-              {/* central level node */}
               <circle
                 cx={CX}
                 cy={y}
@@ -409,7 +397,7 @@ function TalentTree(props: { talents: boolean[] }) {
       </svg>
     </div>
   )
-}
+}, (prev, next) => prev.talents.every((v, i) => v === next.talents[i]) && prev.talents.length === next.talents.length)
 
 // ---------- Main PlayerCard ----------
 
@@ -431,35 +419,27 @@ export function PlayerCard(props: { player: PlayerData; mirrored?: boolean }) {
         mirrored={mirrored}
       />
 
-      {/* Middle: HP/MP bars, then a two-row block (skills / TP+neutral) with the
-          talent tree below the MP bar hugging the inner side toward the items. */}
+      {/* Middle: HP/MP bars, then a two-row (skills / TP+neutral) block; the talent
+          tree sits below the MP bar and is pushed against the item grid. */}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        {/* HP & MP bars - full width */}
         <div className="flex flex-col gap-0.5">
           <HealthBar current={player.hp} max={player.hpMax} />
           <ManaBar current={player.mana} max={player.manaMax} />
         </div>
 
-        {/* Below MP: skills + TP/neutral block, plus the talent tree. justify-between
-            keeps the skills toward the portrait and pushes the tree against the item
-            grid: left of items (Radiant) / right of items (Dire, via row-reverse). */}
         <div className={`flex ${flexDir} items-stretch justify-between gap-2`}>
           <div className="flex flex-col gap-0.5">
-            {/* Row 1: abilities (skills) */}
-            <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} gap-0.5`}>
+            <div className={`flex ${flexDir} gap-0.5`}>
               {player.abilities.map((ab) => (
                 <AbilityIcon key={ab.abilityKey} ability={ab} />
               ))}
             </div>
-            {/* Row 2: TP + Neutral crafting (Artifact + Enchant), directly under the skills */}
-            <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} items-center gap-1`}>
+            <div className={`flex ${flexDir} items-center gap-1`}>
               <TpIcon teleport={teleport} />
               <NeutralCraftingIcons neutralCrafting={player.neutralCrafting} mirrored={mirrored} />
             </div>
           </div>
 
-          {/* Talent tree - two rows tall, below the MP bar, hugging the items.
-              The tree itself is never mirrored; only its position flips. */}
           <TalentTree talents={player.talents} />
         </div>
       </div>
