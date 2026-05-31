@@ -90,8 +90,7 @@ struct AppState {
 }
 
 fn now_ts_server_ms() -> i64 {
-    let ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
-    ms as i64
+    (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 fn utc_date_dir(root: &Path) -> PathBuf {

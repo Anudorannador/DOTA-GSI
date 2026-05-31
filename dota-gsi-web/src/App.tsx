@@ -111,17 +111,12 @@ function pickTeamKeys(payload: JsonObject): string[] {
 }
 
 function getTeamLabel(payload: JsonObject, teamKey: string): string | undefined {
-  const playerRoot = isObject(payload.player) ? payload.player : undefined
+  const playerRoot = asObject(payload.player)
 
-  const teamRoot =
-    playerRoot && isObject(playerRoot[teamKey]) ? (playerRoot[teamKey] as JsonObject) : undefined
+  const teamRoot = asObject(playerRoot?.[teamKey])
   if (teamRoot) {
     const playerKeys = Object.keys(teamRoot).sort(sortByNumberSuffix)
-    const firstPlayerKey = playerKeys[0]
-    const firstPlayer =
-      firstPlayerKey && isObject(teamRoot[firstPlayerKey])
-        ? (teamRoot[firstPlayerKey] as JsonObject)
-        : undefined
+    const firstPlayer = asObject(playerKeys[0] ? teamRoot[playerKeys[0]] : undefined)
     const teamName = firstPlayer ? asString(firstPlayer.team_name) : undefined
     if (teamName) return teamName
   }
@@ -130,10 +125,10 @@ function getTeamLabel(payload: JsonObject, teamKey: string): string | undefined 
 }
 
 function getTeamView(payload: JsonObject, teamKey: string) {
-  const heroRoot = isObject(payload.hero) ? payload.hero : undefined
-  const itemsRoot = isObject(payload.items) ? payload.items : undefined
-  const abilitiesRoot = isObject(payload.abilities) ? payload.abilities : undefined
-  const neutralitemsRoot = isObject(payload.neutralitems) ? payload.neutralitems : undefined
+  const heroRoot = asObject(payload.hero)
+  const itemsRoot = asObject(payload.items)
+  const abilitiesRoot = asObject(payload.abilities)
+  const neutralitemsRoot = asObject(payload.neutralitems)
 
   const heroTeam = asObject(heroRoot?.[teamKey])
   const itemsTeam = asObject(itemsRoot?.[teamKey])
@@ -153,7 +148,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       if (choiceKeys.length === 0) return null
 
       for (const k of choiceKeys) {
-        const c = isObject(choices[k]) ? (choices[k] as JsonObject) : undefined
+        const c = asObject(choices[k])
         if (!c) continue
         const selected = c.selected
         if (selected !== true) continue
@@ -168,17 +163,13 @@ function getTeamView(payload: JsonObject, teamKey: string) {
     }
 
     for (const tierKey of tierKeys) {
-      const tierObj = isObject(playerObj[tierKey]) ? (playerObj[tierKey] as JsonObject) : undefined
+      const tierObj = asObject(playerObj[tierKey])
       if (!tierObj) continue
 
       // The GSI still calls the active component "trinket"; in-game (since 7.38)
       // it is the "Artifact", so we expose it under that name.
-      const enchantChoices = isObject(tierObj.enchantment_choices)
-        ? (tierObj.enchantment_choices as JsonObject)
-        : undefined
-      const artifactChoices = isObject(tierObj.trinket_choices)
-        ? (tierObj.trinket_choices as JsonObject)
-        : undefined
+      const enchantChoices = asObject(tierObj.enchantment_choices)
+      const artifactChoices = asObject(tierObj.trinket_choices)
 
       const selectedEnch = pickSelected(enchantChoices)
       const selectedArtifact = pickSelected(artifactChoices)
@@ -209,7 +200,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
 
     return keys
       .map((key) => {
-        const v = isObject(itemsPlayer[key]) ? (itemsPlayer[key] as JsonObject) : undefined
+        const v = asObject(itemsPlayer[key])
         const name = v ? asString(v.name) : undefined
         const cooldown = v ? asNumber(v.cooldown) : undefined
         const maxCooldown = v ? asNumber(v.max_cooldown) : undefined
@@ -231,7 +222,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
 
   const players = playerKeys
     .map((playerKey) => {
-      const hero = heroTeam && isObject(heroTeam[playerKey]) ? (heroTeam[playerKey] as JsonObject) : undefined
+      const hero = asObject(heroTeam?.[playerKey])
       const heroName = hero ? asString(hero.name) : undefined
       const hp = hero ? asNumber(hero.health) : undefined
       const hpMax = hero ? asNumber(hero.max_health) : undefined
@@ -241,11 +232,10 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       const alive = asBoolean(hero?.alive)
       const respawnSeconds = asNumber(hero?.respawn_seconds)
 
-      const itemsPlayer =
-        itemsTeam && isObject(itemsTeam[playerKey]) ? (itemsTeam[playerKey] as JsonObject) : undefined
+      const itemsPlayer = asObject(itemsTeam?.[playerKey])
       const items = Array.from({ length: 9 }, (_, i) => {
         const slotKey = `slot${i}`
-        const slot = isObject(itemsPlayer?.[slotKey]) ? (itemsPlayer?.[slotKey] as JsonObject) : undefined
+        const slot = asObject(itemsPlayer?.[slotKey])
         const name = slot ? asString(slot.name) : undefined
         const cooldown = slot ? asNumber(slot.cooldown) : undefined
         const charges = slot ? itemCharges(slot) : undefined
@@ -254,19 +244,14 @@ function getTeamView(payload: JsonObject, teamKey: string) {
 
       const teleports = pickTeleport0(itemsPlayer)
 
-      const abilitiesPlayer =
-        abilitiesTeam && isObject(abilitiesTeam[playerKey])
-          ? (abilitiesTeam[playerKey] as JsonObject)
-          : undefined
+      const abilitiesPlayer = asObject(abilitiesTeam?.[playerKey])
       const abilityKeys = abilitiesPlayer
         ? Object.keys(abilitiesPlayer).filter((k) => k.startsWith('ability'))
         : []
       abilityKeys.sort(sortByNumberSuffix)
       const abilities = abilityKeys
         .map((abilityKey) => {
-          const ab = isObject(abilitiesPlayer?.[abilityKey])
-            ? (abilitiesPlayer?.[abilityKey] as JsonObject)
-            : undefined
+          const ab = asObject(abilitiesPlayer?.[abilityKey])
           const name = ab ? asString(ab.name) : undefined
           const cooldown = ab ? asNumber(ab.cooldown) : undefined
           const maxCooldown = ab ? asNumber(ab.max_cooldown) : undefined
@@ -477,8 +462,8 @@ function App() {
   const headerTimes = useMemo(() => {
     if (!payload) return null
 
-    const map = isObject(payload.map) ? payload.map : undefined
-    const provider = isObject(payload.provider) ? payload.provider : undefined
+    const map = asObject(payload.map)
+    const provider = asObject(payload.provider)
 
     const clockTime = map ? asNumber(map.clock_time) : undefined
     const gameTime = map ? asNumber(map.game_time) : undefined

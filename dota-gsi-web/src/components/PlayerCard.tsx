@@ -169,11 +169,7 @@ function TpIcon(props: { teleport: SpecialItem | undefined }) {
         <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">TP</div>
       )}
       {!isEmpty && <CooldownFanOverlay cooldown={tp?.cooldown} maxCooldown={tp?.maxCooldown} />}
-      {!isEmpty && tp?.charges !== undefined && tp.charges !== 0 ? (
-        <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
-          {Math.trunc(tp.charges)}
-        </div>
-      ) : null}
+      {!isEmpty ? <ChargesBadge count={tp?.charges} /> : null}
     </div>
   )
 }
