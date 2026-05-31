@@ -27,29 +27,18 @@ async function fetchStatus(url: string): Promise<'ok' | 'notFound' | 'unknown'> 
 }
 
 async function resolveAbilityIcon(candidates: string[]): Promise<{ url: string | null; notFound: boolean }> {
-  let sawNotFound = false
-  let sawUnknownFailure = false
-
+  // Sequential probing is intentional (avoid spamming CDN hosts).
   for (const url of candidates) {
-    // Try to confirm 404 explicitly.
-    // eslint-disable-next-line no-await-in-loop
     const status = await fetchStatus(url)
     if (status === 'ok') return { url, notFound: false }
-    if (status === 'notFound') {
-      // User rule: one explicit 404 is enough to treat it as missing.
-      sawNotFound = true
-      return { url: null, notFound: true }
-    }
-
-    // If HEAD is blocked (CORS) or flaky, fall back to actually loading the image.
-    // eslint-disable-next-line no-await-in-loop
-    const ok = await probeImage(url)
-    if (ok) return { url, notFound: false }
-    sawUnknownFailure = true
+    // One explicit 404 is enough to treat the icon as missing.
+    if (status === 'notFound') return { url: null, notFound: true }
+    // If HEAD/GET is blocked (CORS) or flaky, fall back to loading the image.
+    if (await probeImage(url)) return { url, notFound: false }
   }
 
-  const notFound = sawNotFound && !sawUnknownFailure
-  return { url: null, notFound }
+  // Exhausted candidates without an explicit 404: unknown, not a hard miss.
+  return { url: null, notFound: false }
 }
 
 export function useAbilityImageUrl(abilityName: string | undefined, passive: boolean | undefined) {

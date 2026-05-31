@@ -31,7 +31,6 @@ export async function firstReachableImageUrl(
   for (const url of candidates) {
     // Sequential probing is intentional: avoid spamming hosts.
     // React Query dedupes calls per hero key.
-    // eslint-disable-next-line no-await-in-loop
     const ok = await probeImage(url, timeoutMsPerCandidate)
     if (ok) return url
   }

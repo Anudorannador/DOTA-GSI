@@ -77,7 +77,6 @@ struct Envelope {
 struct AppStateInner {
     current_payload: Option<Value>,
     last_payload_hash: Option<[u8; 32]>,
-    message_count: u64,
 }
 
 #[derive(Clone)]
@@ -170,18 +169,18 @@ fn extract_auth_token(payload: &Value) -> Option<&str> {
 fn extract_updates(payload: &Value) -> Option<Value> {
     let added = payload.get("added");
     let previously = payload.get("previously");
+    if added.is_none() && previously.is_none() {
+        return None;
+    }
 
-    // At least one must exist
-    (added.is_some() || previously.is_some()).then(|| {
-        let mut obj = serde_json::Map::new();
-        added.iter().for_each(|a| {
-            obj.insert("added".to_string(), (*a).clone());
-        });
-        previously.iter().for_each(|p| {
-            obj.insert("previously".to_string(), (*p).clone());
-        });
-        Value::Object(obj)
-    })
+    let mut obj = serde_json::Map::new();
+    if let Some(a) = added {
+        obj.insert("added".to_string(), a.clone());
+    }
+    if let Some(p) = previously {
+        obj.insert("previously".to_string(), p.clone());
+    }
+    Some(Value::Object(obj))
 }
 
 async fn redis_publish_payload(state: &AppState, payload_json: &str) {
@@ -278,83 +277,59 @@ async fn spawn_raw_logger(cfg: &Config) -> anyhow::Result<mpsc::Sender<Envelope>
 }
 
 async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> impl IntoResponse {
-    // Inner pure function returns Result, outer layer handles errors uniformly
-    async fn process_payload(
-        state: &AppState,
-        payload: &Value,
-    ) -> Result<String, &'static str> {
-        // 1) Auth - FP chain with and_then
-        extract_auth_token(payload)
-            .ok_or("Unauthorized")
-            .and_then(|auth| {
-                if auth == state.cfg.gsi_auth_token {
-                    Ok(())
-                } else {
-                    warn!("invalid token: {auth}");
-                    Err("Unauthorized")
-                }
-            })?;
-
-        // 2) Hash - map error handling
-        let payload_hash = hash_payload(payload)
-            .map_err(|e| {
-                error!("hash failed: {e}");
-                "Bad payload"
-            })?;
-
-        // 3) Update state and check duplicate
-        let is_duplicate = {
-            let mut inner = state.inner.write().await;
-            if inner.last_payload_hash.is_some_and(|h| h == payload_hash) {
-                debug!("duplicate payload");
-                true
-            } else {
-                inner.last_payload_hash = Some(payload_hash);
-                inner.message_count = inner.message_count.saturating_add(1);
-                inner.current_payload = Some(payload.clone());
-                false
+    // Inner returns Result so the outer layer can map errors to status codes uniformly.
+    async fn process_payload(state: &AppState, payload: &Value) -> Result<&'static str, &'static str> {
+        match extract_auth_token(payload) {
+            Some(token) if token == state.cfg.gsi_auth_token => {}
+            Some(token) => {
+                warn!("invalid token: {token}");
+                return Err("Unauthorized");
             }
-        };
-
-        if is_duplicate {
-            return Ok("duplicate".to_string());
+            None => return Err("Unauthorized"),
         }
 
-        // 4) Serialize payload
-        let payload_json = serde_json::to_string(payload)
-            .map_err(|e| {
-                error!("serialize payload failed: {e}");
-                "Bad payload"
-            })?;
+        let payload_hash = hash_payload(payload).map_err(|e| {
+            error!("hash failed: {e}");
+            "Bad payload"
+        })?;
 
-        // 5) Build envelope + Redis publish
-        let envelope = build_envelope(payload.clone(), &state.cfg.source);
-        redis_publish_payload(&state, &payload_json).await;
+        // Drop consecutive duplicates so consumers only see real state changes.
+        {
+            let mut inner = state.inner.write().await;
+            if inner.last_payload_hash == Some(payload_hash) {
+                debug!("duplicate payload");
+                return Ok("duplicate");
+            }
+            inner.last_payload_hash = Some(payload_hash);
+            inner.current_payload = Some(payload.clone());
+        }
 
-        // 6) Raw log - FP style with iter().for_each
-        state.raw_log_tx
-            .iter()
-            .for_each(|tx| {
-                if let Err(e) = tx.try_send(envelope.clone()) {
-                    warn!("raw log queue full: {e}");
-                }
-            });
+        let payload_json = serde_json::to_string(payload).map_err(|e| {
+            error!("serialize payload failed: {e}");
+            "Bad payload"
+        })?;
 
-        // 7) WebSocket broadcasts - FP style
-        let _ = state.full_tx.send(payload_json.clone());
+        redis_publish_payload(state, &payload_json).await;
 
-        extract_updates(&payload)
-            .and_then(|delta| serde_json::to_string(&delta).ok())
-            .iter()
-            .for_each(|delta_json| {
-                let _ = state.updates_tx.send(delta_json.clone());
-            });
+        if let Some(tx) = &state.raw_log_tx {
+            let envelope = build_envelope(payload.clone(), &state.cfg.source);
+            if let Err(e) = tx.try_send(envelope) {
+                warn!("raw log queue full: {e}");
+            }
+        }
+
+        // Broadcast the full snapshot, plus the added/previously delta when present.
+        let _ = state.full_tx.send(payload_json);
+        if let Some(delta) = extract_updates(payload) {
+            if let Ok(delta_json) = serde_json::to_string(&delta) {
+                let _ = state.updates_tx.send(delta_json);
+            }
+        }
 
         info!("GSI update processed");
-        Ok("processed".to_string())
+        Ok("processed")
     }
 
-    // Outer error handling
     match process_payload(&state, &payload).await {
         Ok(_) => (StatusCode::OK, "processed"),
         Err(msg) => {

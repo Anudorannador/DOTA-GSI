@@ -1,10 +1,5 @@
 import { useSmoothedCooldown } from '../hooks/useSmoothedCooldown'
-
-function clamp01(v: number): number {
-  if (v < 0) return 0
-  if (v > 1) return 1
-  return v
-}
+import { clamp01 } from '../lib/math'
 
 function formatCd(value: number): string {
   if (!Number.isFinite(value)) return ''

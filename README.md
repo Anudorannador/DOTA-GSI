@@ -9,19 +9,35 @@
 - `dota-gsi-server/`: Rust server that receives Dota 2 Game State Integration (GSI) payloads
 - `dota-gsi-web/`: Web UI (Vite + React)
 
-## Dota 2 GSI Config
+## Dota 2 GSI Config (Linux)
 
-Put this file into your Dota 2 GSI config folder (commonly something like):
+1. Enable GSI: Steam → Library → Dota 2 → Properties → Launch Options, add
+   `-gamestateintegration` (Dota only loads GSI configs when launched with it).
 
-- Windows: `...\Steam\steamapps\common\dota 2 beta\game\dota\cfg\gamestate_integration\`
-- Linux/Proton: inside the same `dota/cfg/gamestate_integration/` folder under your Dota installation
+2. Put `gamestate_integration_sidecar.cfg` into the `gamestate_integration`
+   folder inside your Dota install. Its location depends on how Steam is
+   installed:
 
-File name example: `gamestate_integration_sidecar.cfg`
+   - Native Steam:   `~/.steam/steam/steamapps/common/dota 2 beta/game/dota/cfg/gamestate_integration/`
+   - Newer/alt path: `~/.local/share/Steam/steamapps/common/dota 2 beta/game/dota/cfg/gamestate_integration/`
+   - Flatpak Steam:  `~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/dota 2 beta/game/dota/cfg/gamestate_integration/`
+
+   Not sure which one? Find it with:
+
+   ```bash
+   find ~ -type d -path '*dota 2 beta/game/dota/cfg' 2>/dev/null
+   ```
+
+   Create the `gamestate_integration` subfolder if it is missing. The file name
+   must start with `gamestate_integration_`, then restart Dota 2.
 
 Important:
 
 - The `auth.token` in this file must match `GSI_AUTH_TOKEN` used by the server.
-- `uri` must point to where this server is reachable.
+- `uri` must point to where this server is reachable. When the game and this
+  server run on the same Linux machine, `http://127.0.0.1:3005/` is correct.
+  For a separate LAN host, use its IP (e.g. `http://192.168.x.x:3005/`) and
+  allow that port through the firewall.
 
 ```cfg
 "dota2-gsi Configuration"
@@ -56,6 +72,17 @@ Important:
     }
 }
 ```
+
+## Patch compatibility (Dota 2 7.41)
+
+- **Facets (命石) were removed from the game in 7.41.** The dashboard never
+  rendered facets, so nothing changes; the GSI still emits a vestigial
+  `hero.facet` field (always `0`), which is ignored.
+- **Neutral items** still use the Madstone (狂石) crafting system. Since 7.41,
+  Enchantment options depend on the hero's primary attribute (no longer random)
+  and tiers 2-5 offer 5 choices instead of 4. The crafted result is still one
+  Artifact + one Enchantment, which the dashboard reads from the
+  `neutralitems` block (keep `"neutralitems" "1"` in the config above).
 
 ## License
 

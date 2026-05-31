@@ -86,6 +86,18 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function asObject(value: unknown): JsonObject | undefined {
+  return isObject(value) ? value : undefined
+}
+
+function itemCharges(item: JsonObject): number | undefined {
+  return asNumber(item.item_charges) ?? asNumber(item.charges)
+}
+
 function shouldHideAbilityName(name: string): boolean {
   return name.startsWith('seasonal_') || name === 'plus_high_five' || name === 'plus_guild_banner'
 }
@@ -123,20 +135,13 @@ function getTeamView(payload: JsonObject, teamKey: string) {
   const abilitiesRoot = isObject(payload.abilities) ? payload.abilities : undefined
   const neutralitemsRoot = isObject(payload.neutralitems) ? payload.neutralitems : undefined
 
-  const heroTeam = heroRoot && isObject(heroRoot[teamKey]) ? (heroRoot[teamKey] as JsonObject) : undefined
-  const itemsTeam = itemsRoot && isObject(itemsRoot[teamKey]) ? (itemsRoot[teamKey] as JsonObject) : undefined
-  const abilitiesTeam =
-    abilitiesRoot && isObject(abilitiesRoot[teamKey]) ? (abilitiesRoot[teamKey] as JsonObject) : undefined
-  const neutralitemsTeam =
-    neutralitemsRoot && isObject(neutralitemsRoot[teamKey])
-      ? (neutralitemsRoot[teamKey] as JsonObject)
-      : undefined
+  const heroTeam = asObject(heroRoot?.[teamKey])
+  const itemsTeam = asObject(itemsRoot?.[teamKey])
+  const abilitiesTeam = asObject(abilitiesRoot?.[teamKey])
+  const neutralitemsTeam = asObject(neutralitemsRoot?.[teamKey])
 
   const pickNeutralCraftingSelection = (playerKey: string) => {
-    const playerObj =
-      neutralitemsTeam && isObject(neutralitemsTeam[playerKey])
-        ? (neutralitemsTeam[playerKey] as JsonObject)
-        : undefined
+    const playerObj = asObject(neutralitemsTeam?.[playerKey])
     if (!playerObj) return null
 
     const tierKeys = Object.keys(playerObj).filter((k) => /^tier\d+$/.test(k))
@@ -154,8 +159,8 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         if (selected !== true) continue
         const itemName = asString(c.item_name)
         if (!itemName) continue
-        const cooldown = asNumber((c as any).cooldown)
-        const maxCooldown = asNumber((c as any).max_cooldown)
+        const cooldown = asNumber(c.cooldown)
+        const maxCooldown = asNumber(c.max_cooldown)
         return { itemName, cooldown, maxCooldown }
       }
 
@@ -166,27 +171,29 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       const tierObj = isObject(playerObj[tierKey]) ? (playerObj[tierKey] as JsonObject) : undefined
       if (!tierObj) continue
 
-      const enchantChoices = isObject((tierObj as any).enchantment_choices)
-        ? ((tierObj as any).enchantment_choices as JsonObject)
+      // The GSI still calls the active component "trinket"; in-game (since 7.38)
+      // it is the "Artifact", so we expose it under that name.
+      const enchantChoices = isObject(tierObj.enchantment_choices)
+        ? (tierObj.enchantment_choices as JsonObject)
         : undefined
-      const trinketChoices = isObject((tierObj as any).trinket_choices)
-        ? ((tierObj as any).trinket_choices as JsonObject)
+      const artifactChoices = isObject(tierObj.trinket_choices)
+        ? (tierObj.trinket_choices as JsonObject)
         : undefined
 
       const selectedEnch = pickSelected(enchantChoices)
-      const selectedTrinket = pickSelected(trinketChoices)
+      const selectedArtifact = pickSelected(artifactChoices)
 
-      // Valid tier requires BOTH sides selected.
-      if (!selectedEnch || !selectedTrinket) continue
+      // A crafted tier always pairs one Enchantment with one Artifact.
+      if (!selectedEnch || !selectedArtifact) continue
 
       return {
         tierKey,
         enchantment: { name: selectedEnch.itemName },
-        trinket: {
-          key: `${tierKey}.trinket`,
-          name: selectedTrinket.itemName,
-          cooldown: selectedTrinket.cooldown,
-          maxCooldown: selectedTrinket.maxCooldown,
+        artifact: {
+          key: `${tierKey}.artifact`,
+          name: selectedArtifact.itemName,
+          cooldown: selectedArtifact.cooldown,
+          maxCooldown: selectedArtifact.maxCooldown,
         },
       }
     }
@@ -206,7 +213,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         const name = v ? asString(v.name) : undefined
         const cooldown = v ? asNumber(v.cooldown) : undefined
         const maxCooldown = v ? asNumber(v.max_cooldown) : undefined
-        const charges = v ? asNumber((v as any).item_charges) ?? asNumber((v as any).charges) : undefined
+        const charges = v ? itemCharges(v) : undefined
         return { key, name, cooldown, maxCooldown, charges }
       })
       .slice(0, 3)
@@ -231,8 +238,8 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       const level = hero ? asNumber(hero.level) : undefined
       const mana = hero ? asNumber(hero.mana) : undefined
       const manaMax = hero ? asNumber(hero.max_mana) : undefined
-      const alive = hero && typeof (hero as any).alive === 'boolean' ? ((hero as any).alive as boolean) : undefined
-      const respawnSeconds = hero ? asNumber((hero as any).respawn_seconds) : undefined
+      const alive = asBoolean(hero?.alive)
+      const respawnSeconds = asNumber(hero?.respawn_seconds)
 
       const itemsPlayer =
         itemsTeam && isObject(itemsTeam[playerKey]) ? (itemsTeam[playerKey] as JsonObject) : undefined
@@ -241,12 +248,11 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         const slot = isObject(itemsPlayer?.[slotKey]) ? (itemsPlayer?.[slotKey] as JsonObject) : undefined
         const name = slot ? asString(slot.name) : undefined
         const cooldown = slot ? asNumber(slot.cooldown) : undefined
-        const charges = slot ? asNumber((slot as any).item_charges) ?? asNumber((slot as any).charges) : undefined
+        const charges = slot ? itemCharges(slot) : undefined
         return { slotKey, name, cooldown, charges }
       })
 
       const teleports = pickTeleport0(itemsPlayer)
-      const neutrals = pickSpecialItems(itemsPlayer, 'neutral')
 
       const abilitiesPlayer =
         abilitiesTeam && isObject(abilitiesTeam[playerKey])
@@ -264,7 +270,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
           const name = ab ? asString(ab.name) : undefined
           const cooldown = ab ? asNumber(ab.cooldown) : undefined
           const maxCooldown = ab ? asNumber(ab.max_cooldown) : undefined
-          const passive = ab && typeof (ab as any).passive === 'boolean' ? ((ab as any).passive as boolean) : undefined
+          const passive = asBoolean(ab?.passive)
           return { abilityKey, name, cooldown, maxCooldown, passive }
         })
         .filter(
@@ -291,7 +297,6 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         respawnSeconds,
         items,
         teleports,
-        neutrals,
         neutralCrafting: pickNeutralCraftingSelection(playerKey),
         abilities,
       }
@@ -479,11 +484,8 @@ function App() {
     const gameTime = map ? asNumber(map.game_time) : undefined
     const matchTime = clockTime ?? gameTime
 
-    const daytime = map && typeof (map as any).daytime === 'boolean' ? ((map as any).daytime as boolean) : undefined
-    const nightstalkerNight =
-      map && typeof (map as any).nightstalker_night === 'boolean'
-        ? ((map as any).nightstalker_night as boolean)
-        : undefined
+    const daytime = asBoolean(map?.daytime)
+    const nightstalkerNight = asBoolean(map?.nightstalker_night)
 
     const providerTs = provider ? asNumber(provider.timestamp) : undefined
     const providerLocal = providerTs !== undefined ? formatEpochSecondsToLocal(providerTs) : undefined
@@ -645,7 +647,6 @@ function App() {
                         respawnSeconds: p.respawnSeconds,
                         items: p.items,
                         teleports: p.teleports,
-                        neutrals: p.neutrals,
                         neutralCrafting: p.neutralCrafting,
                         abilities: p.abilities,
                       }}

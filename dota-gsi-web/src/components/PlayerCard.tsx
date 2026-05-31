@@ -6,9 +6,38 @@
 import { useHeroImageUrl } from '../hooks/useHeroImageUrl'
 import { useItemImageUrl, formatItemFallbackLabel } from '../hooks/useItemImageUrl'
 import { useAbilityImageUrl } from '../hooks/useAbilityImageUrl'
+import { formatHeroDisplayName } from '../lib/dotaHero'
 import { CooldownFanOverlay } from './CooldownFanOverlay'
 import { HealthBar, ManaBar } from './HealthManaBar'
-import type { ItemSlot, SpecialItem, NeutralCraftingSelection } from './ItemsPanel'
+
+export type ItemSlot = {
+  slotKey: string
+  name: string | undefined
+  cooldown: number | undefined
+  charges?: number | undefined
+}
+
+export type SpecialItem = {
+  key: string
+  name: string | undefined
+  cooldown: number | undefined
+  maxCooldown: number | undefined
+  charges?: number | undefined
+}
+
+/**
+ * The crafted neutral item for a player: a passive Enchantment plus an active
+ * Artifact (called "trinket" in older GSI payloads). Since Dota 2 7.41 the
+ * Enchantment options depend on the hero's primary attribute, but the crafted
+ * result is still one Enchantment + one Artifact, so this shape is unchanged.
+ */
+export type NeutralCraftingSelection =
+  | {
+      tierKey: string
+      enchantment: { name: string }
+      artifact: SpecialItem
+    }
+  | null
 
 type Ability = {
   abilityKey: string
@@ -16,7 +45,6 @@ type Ability = {
   cooldown: number | undefined
   maxCooldown: number | undefined
   passive: boolean | undefined
-  charges?: number | undefined
 }
 
 export type PlayerData = {
@@ -31,21 +59,20 @@ export type PlayerData = {
   respawnSeconds: number | undefined
   items: ItemSlot[]
   teleports: SpecialItem[]
-  neutrals: SpecialItem[]
   neutralCrafting: NeutralCraftingSelection
   abilities: Ability[]
 }
 
 // ---------- Sub-components ----------
 
-/** Format hero internal name to display name */
-function formatHeroDisplayName(internalName: string): string {
-  // npc_dota_hero_axe -> Axe
-  const withoutPrefix = internalName.replace(/^npc_dota_hero_/, '')
-  return withoutPrefix
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
+/** Bottom-right charge/stack count badge shared by item & artifact icons. */
+function ChargesBadge(props: { count: number | undefined }) {
+  if (props.count === undefined || props.count === 0) return null
+  return (
+    <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
+      {Math.trunc(props.count)}
+    </div>
+  )
 }
 
 function HeroPortrait(props: {
@@ -118,11 +145,6 @@ function AbilityIcon(props: { ability: Ability }) {
       ) : (
         <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">?</div>
       )}
-      {props.ability.charges !== undefined && props.ability.charges !== 0 ? (
-        <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
-          {Math.trunc(props.ability.charges)}
-        </div>
-      ) : null}
       <CooldownFanOverlay cooldown={cooldown} maxCooldown={maxCooldown} />
     </div>
   )
@@ -188,11 +210,7 @@ function ItemIcon(props: {
       {!isEmpty && props.cooldown !== undefined && props.cooldown > 0 && (
         <CooldownFanOverlay cooldown={props.cooldown} maxCooldown={props.maxCooldown} />
       )}
-      {!isEmpty && props.count !== undefined && props.count !== 0 ? (
-        <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
-          {Math.trunc(props.count)}
-        </div>
-      ) : null}
+      {!isEmpty ? <ChargesBadge count={props.count} /> : null}
     </div>
   )
 }
@@ -206,19 +224,20 @@ function ItemGrid3x3(props: { slots: ItemSlot[] }) {
 
   return (
     <div className="grid grid-cols-3 gap-0.5">
-      {ordered.map((slot) => (
-        <div
-          key={slot.slotKey}
-          className={`${Number(slot.slotKey.replace('slot', '')) >= 6 ? 'h-[34px]' : 'h-9'} w-12`}
-        >
-          <ItemIcon
-            name={slot.name}
-            cooldown={slot.cooldown}
-            grayscale={Number(slot.slotKey.replace('slot', '')) >= 6}
-            count={(slot as any).charges}
-          />
-        </div>
-      ))}
+      {ordered.map((slot) => {
+        // Slots 6-8 are the backpack: smaller and dimmed.
+        const isBackpack = Number(slot.slotKey.replace('slot', '')) >= 6
+        return (
+          <div key={slot.slotKey} className={`${isBackpack ? 'h-[34px]' : 'h-9'} w-12`}>
+            <ItemIcon
+              name={slot.name}
+              cooldown={slot.cooldown}
+              grayscale={isBackpack}
+              count={slot.charges}
+            />
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -226,7 +245,11 @@ function ItemGrid3x3(props: { slots: ItemSlot[] }) {
 function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection; mirrored?: boolean }) {
   const nc = props.neutralCrafting
   const flexDir = props.mirrored ? 'flex-row-reverse' : 'flex-row'
-  
+
+  // Hooks must run unconditionally; useItemImageUrl is disabled for undefined names.
+  const artifactUrl = useItemImageUrl(nc?.artifact.name).data ?? undefined
+  const enchantUrl = useItemImageUrl(nc?.enchantment.name).data ?? undefined
+
   if (!nc) {
     return (
       <div className={`flex ${flexDir} gap-1`}>
@@ -236,39 +259,25 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
     )
   }
 
-  const trinketQuery = useItemImageUrl(nc.trinket.name)
-  const enchantQuery = useItemImageUrl(nc.enchantment.name)
-  const trinketUrl = trinketQuery.data ?? undefined
-  const enchantUrl = enchantQuery.data ?? undefined
-
   return (
     <div className={`flex ${flexDir} gap-1`}>
-      {/* Trinket (has CD) */}
+      {/* Artifact (active component, has a cooldown) */}
       <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-slate-700">
-        {trinketUrl ? (
-          <img className="h-full w-full object-cover" src={trinketUrl} alt="Trinket" loading="lazy" />
+        {artifactUrl ? (
+          <img className="h-full w-full object-cover" src={artifactUrl} alt="Artifact" loading="lazy" />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">T</div>
+          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">A</div>
         )}
-        <CooldownFanOverlay cooldown={nc.trinket.cooldown} maxCooldown={nc.trinket.maxCooldown} />
-        {nc.trinket.charges !== undefined && nc.trinket.charges !== 0 ? (
-          <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
-            {Math.trunc(nc.trinket.charges)}
-          </div>
-        ) : null}
+        <CooldownFanOverlay cooldown={nc.artifact.cooldown} maxCooldown={nc.artifact.maxCooldown} />
+        <ChargesBadge count={nc.artifact.charges} />
       </div>
-      {/* Enchantment (passive) */}
+      {/* Enchantment (passive stat bonus, no cooldown or charges) */}
       <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-slate-700">
         {enchantUrl ? (
           <img className="h-full w-full object-cover" src={enchantUrl} alt="Enchant" loading="lazy" />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">E</div>
         )}
-        {nc.enchantment && (nc.enchantment as any).charges !== undefined && (nc.enchantment as any).charges !== 0 ? (
-          <div className="absolute bottom-0 right-0 rounded-tl bg-black/80 px-1.5 text-xs font-bold leading-4 text-white">
-            {Math.trunc((nc.enchantment as any).charges)}
-          </div>
-        ) : null}
       </div>
     </div>
   )
@@ -311,7 +320,7 @@ export function PlayerCard(props: { player: PlayerData; mirrored?: boolean }) {
           </div>
           {/* Spacer - one ability slot width */}
           <div className="w-9 shrink-0" aria-hidden="true" />
-          {/* TP + Neutral crafting (Trinket + Enchant) */}
+          {/* TP + Neutral crafting (Artifact + Enchant) */}
           <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} items-center gap-1`}>
             <TpIcon teleport={teleport} />
             <NeutralCraftingIcons neutralCrafting={player.neutralCrafting} mirrored={mirrored} />

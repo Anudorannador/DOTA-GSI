@@ -1,41 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
 
-export function useSmoothedCooldown(cooldownSeconds: number | undefined) {
-  const baseRef = useRef<{ cd: number; atMs: number } | null>(null)
-  const rafRef = useRef<number | null>(null)
+function normalizeCooldown(cooldownSeconds: number | undefined): number {
+  return typeof cooldownSeconds === 'number' && Number.isFinite(cooldownSeconds) ? cooldownSeconds : 0
+}
 
-  const [value, setValue] = useState<number>(() => {
-    return typeof cooldownSeconds === 'number' && Number.isFinite(cooldownSeconds) ? cooldownSeconds : 0
-  })
+/**
+ * Counts a cooldown down to zero smoothly via requestAnimationFrame.
+ * State is only updated from the rAF callback (never synchronously inside the
+ * effect), so it avoids cascading renders.
+ */
+export function useSmoothedCooldown(cooldownSeconds: number | undefined) {
+  const rafRef = useRef<number | null>(null)
+  const [value, setValue] = useState<number>(() => normalizeCooldown(cooldownSeconds))
 
   useEffect(() => {
-    const cd = typeof cooldownSeconds === 'number' && Number.isFinite(cooldownSeconds) ? cooldownSeconds : 0
-    baseRef.current = { cd, atMs: Date.now() }
-    setValue(cd)
-
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-    }
+    const cd = normalizeCooldown(cooldownSeconds)
+    const startedAtMs = Date.now()
 
     const tick = () => {
-      const base = baseRef.current
-      if (!base) return
-
-      const elapsedSec = (Date.now() - base.atMs) / 1000
-      const next = Math.max(0, base.cd - elapsedSec)
+      const elapsedSec = (Date.now() - startedAtMs) / 1000
+      const next = Math.max(0, cd - elapsedSec)
       setValue(next)
-
-      if (next > 0) {
-        rafRef.current = requestAnimationFrame(tick)
-      } else {
-        rafRef.current = null
-      }
+      rafRef.current = next > 0 ? requestAnimationFrame(tick) : null
     }
 
-    if (cd > 0) {
-      rafRef.current = requestAnimationFrame(tick)
-    }
+    // Schedule one frame even when cd is 0 so `value` resyncs to the new input.
+    rafRef.current = requestAnimationFrame(tick)
 
     return () => {
       if (rafRef.current !== null) {
