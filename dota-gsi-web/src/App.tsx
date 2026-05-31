@@ -234,6 +234,8 @@ function getTeamView(payload: JsonObject, teamKey: string) {
 
       // hero.talent_1..talent_8 booleans (index 0 = talent_1).
       const talents = Array.from({ length: 8 }, (_, i) => asBoolean(hero?.[`talent_${i + 1}`]) ?? false)
+      const aghanimsScepter = asBoolean(hero?.aghanims_scepter) ?? false
+      const aghanimsShard = asBoolean(hero?.aghanims_shard) ?? false
 
       const itemsPlayer = asObject(itemsTeam?.[playerKey])
       const items = Array.from({ length: 9 }, (_, i) => {
@@ -288,6 +290,8 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         neutralCrafting: pickNeutralCraftingSelection(playerKey),
         abilities,
         talents,
+        aghanimsScepter,
+        aghanimsShard,
       }
     })
     .filter((p) => p.heroName)
@@ -639,6 +643,8 @@ function App() {
                         neutralCrafting: p.neutralCrafting,
                         abilities: p.abilities,
                         talents: p.talents,
+                        aghanimsScepter: p.aghanimsScepter,
+                        aghanimsShard: p.aghanimsShard,
                       }}
                       mirrored={mirrored}
                     />

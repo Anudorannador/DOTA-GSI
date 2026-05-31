@@ -64,6 +64,8 @@ export type PlayerData = {
   abilities: Ability[]
   /** hero.talent_1..talent_8 booleans (index 0 = talent_1). */
   talents: boolean[]
+  aghanimsScepter: boolean
+  aghanimsShard: boolean
 }
 
 // ---------- Sub-components ----------
@@ -283,6 +285,44 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
 }
 
 /**
+ * Aghanim upgrades beside the talent tree (left of it on Radiant, right on
+ * Dire): Scepter on top at ~2x the Shard's height. A slot is shown in colour
+ * when owned and greyed out otherwise.
+ */
+function AghanimStatus(props: { scepter: boolean; shard: boolean }) {
+  const scepterUrl = useItemImageUrl('item_ultimate_scepter').data ?? undefined
+  const shardUrl = useItemImageUrl('item_aghanims_shard').data ?? undefined
+
+  const slots = [
+    { url: scepterUrl, active: props.scepter, label: "Aghanim's Scepter", fallback: 'S', activeBg: 'bg-sky-950/50', size: 'flex-[2]' },
+    { url: shardUrl, active: props.shard, label: "Aghanim's Shard", fallback: 'Sh', activeBg: 'bg-violet-950/50', size: 'flex-[1]' },
+  ]
+
+  return (
+    <div className="flex h-full shrink-0 flex-col gap-1">
+      {slots.map((s) => (
+        <div
+          key={s.label}
+          className={`relative w-8 shrink-0 overflow-hidden rounded ${s.active ? s.activeBg : 'bg-slate-800/60'} ${s.size}`}
+          title={`${s.label}${s.active ? '' : ' (not acquired)'}`}
+        >
+          {s.url ? (
+            <img
+              className={`h-full w-full object-contain ${s.active ? '' : 'grayscale opacity-40'}`}
+              src={s.url}
+              alt={s.label}
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">{s.fallback}</div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
  * Compact talent tree: 4 tiers (lvl 25 top -> lvl 10 bottom) with a central
  * level node and left/right pills. A picked side lights gold; both sides can
  * light at once (lvl 26-30 backfill / full lvl 30). The tree is never mirrored;
@@ -440,7 +480,13 @@ export function PlayerCard(props: { player: PlayerData; mirrored?: boolean }) {
             </div>
           </div>
 
-          <TalentTree talents={player.talents} />
+          {/* Aghanim column + talent tree, grouped so they hug the item grid.
+              flexDir keeps the Aghanim column on the outer side of the tree:
+              left of the tree on Radiant, right of it on Dire. */}
+          <div className={`flex ${flexDir} items-stretch gap-1`}>
+            <AghanimStatus scepter={player.aghanimsScepter} shard={player.aghanimsShard} />
+            <TalentTree talents={player.talents} />
+          </div>
         </div>
       </div>
 
