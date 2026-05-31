@@ -232,6 +232,10 @@ function getTeamView(payload: JsonObject, teamKey: string) {
       const alive = asBoolean(hero?.alive)
       const respawnSeconds = asNumber(hero?.respawn_seconds)
 
+      // Talent picks: hero.talent_1..talent_8 booleans.
+      // Mapping (Dota GSI): 1/2 = lvl10, 3/4 = lvl15, 5/6 = lvl20, 7/8 = lvl25; odd = left, even = right.
+      const talents = Array.from({ length: 8 }, (_, i) => asBoolean(hero?.[`talent_${i + 1}`]) ?? false)
+
       const itemsPlayer = asObject(itemsTeam?.[playerKey])
       const items = Array.from({ length: 9 }, (_, i) => {
         const slotKey = `slot${i}`
@@ -284,6 +288,7 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         teleports,
         neutralCrafting: pickNeutralCraftingSelection(playerKey),
         abilities,
+        talents,
       }
     })
     .filter((p) => p.heroName)
@@ -634,6 +639,7 @@ function App() {
                         teleports: p.teleports,
                         neutralCrafting: p.neutralCrafting,
                         abilities: p.abilities,
+                        talents: p.talents,
                       }}
                       mirrored={mirrored}
                     />

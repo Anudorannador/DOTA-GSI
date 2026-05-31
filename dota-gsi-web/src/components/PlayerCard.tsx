@@ -3,6 +3,7 @@
  * Displays hero portrait, level, HP/MP bars, abilities, TP, items, and neutral crafting.
  */
 
+import { useId } from 'react'
 import { useHeroImageUrl } from '../hooks/useHeroImageUrl'
 import { useItemImageUrl, formatItemFallbackLabel } from '../hooks/useItemImageUrl'
 import { useAbilityImageUrl } from '../hooks/useAbilityImageUrl'
@@ -61,6 +62,8 @@ export type PlayerData = {
   teleports: SpecialItem[]
   neutralCrafting: NeutralCraftingSelection
   abilities: Ability[]
+  /** hero.talent_1..talent_8 booleans (index 0 = talent_1). */
+  talents: boolean[]
 }
 
 // ---------- Sub-components ----------
@@ -157,7 +160,7 @@ function TpIcon(props: { teleport: SpecialItem | undefined }) {
   const url = imageQuery.data ?? undefined
 
   return (
-    <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-slate-700">
+    <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-slate-700">
       {url ? (
         <img
           className={`h-full w-full object-cover ${isEmpty ? 'grayscale opacity-40' : ''}`}
@@ -249,8 +252,8 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
   if (!nc) {
     return (
       <div className={`flex ${flexDir} gap-1`}>
-        <div className="h-9 w-9 rounded-full bg-slate-700" />
-        <div className="h-9 w-9 rounded-full bg-slate-700" />
+        <div className="h-8 w-8 rounded-full bg-slate-700" />
+        <div className="h-8 w-8 rounded-full bg-slate-700" />
       </div>
     )
   }
@@ -258,7 +261,7 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
   return (
     <div className={`flex ${flexDir} gap-1`}>
       {/* Artifact (active component, has a cooldown) */}
-      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-slate-700">
+      <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-slate-700">
         {artifactUrl ? (
           <img className="h-full w-full object-cover" src={artifactUrl} alt="Artifact" loading="lazy" />
         ) : (
@@ -268,13 +271,142 @@ function NeutralCraftingIcons(props: { neutralCrafting: NeutralCraftingSelection
         <ChargesBadge count={nc.artifact.charges} />
       </div>
       {/* Enchantment (passive stat bonus, no cooldown or charges) */}
-      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full bg-slate-700">
+      <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-slate-700">
         {enchantUrl ? (
           <img className="h-full w-full object-cover" src={enchantUrl} alt="Enchant" loading="lazy" />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">E</div>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Compact talent tree: 4 tiers stacked vertically (lvl 25 on top, lvl 10 at
+ * bottom, matching the in-game tree). Each tier has a left + right pill plus a
+ * central level node (10/15/20/25). A picked side lights up gold; the level
+ * node lights once that tier has any pick.
+ *
+ * Per Dota rules a tier normally has only one side picked, but at levels 26-30
+ * the other side gets backfilled (lvl 30 = all gold). Since left/right are
+ * independent booleans, both pills simply light when both are true.
+ *
+ * GSI talent mapping: talent_1/2 = lvl10, 3/4 = lvl15, 5/6 = lvl20, 7/8 = lvl25;
+ * odd index = left, even index = right. The tree is NOT mirrored on Dire - only
+ * the surrounding layout flips.
+ */
+function TalentTree(props: { talents: boolean[] }) {
+  const t = props.talents
+  const at = (i: number) => t[i] === true
+  // Top (lvl25) -> bottom (lvl10).
+  const tiers = [
+    { level: 25, left: at(6), right: at(7) },
+    { level: 20, left: at(4), right: at(5) },
+    { level: 15, left: at(2), right: at(3) },
+    { level: 10, left: at(0), right: at(1) },
+  ]
+
+  // Unique gradient/filter ids per instance so multiple trees don't collide.
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
+  const goldId = `ttg-${uid}`
+  const nodeId = `ttn-${uid}`
+  const glowId = `ttglow-${uid}`
+
+  const W = 40
+  const H = 70
+  const CX = W / 2
+  const rowYs = [9, 26, 43, 60] // four tier rows (lvl 25 -> 10)
+  const nodeR = 6.5
+  const pillW = 12
+  const pillH = 9
+
+  return (
+    <div className="flex shrink-0 items-stretch" title="Talents (10/15/20/25)">
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-10" role="img" aria-label="Talent tree">
+        <defs>
+          <linearGradient id={goldId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#ffd668" />
+            <stop offset="0.5" stopColor="#f0b73f" />
+            <stop offset="1" stopColor="#d6952a" />
+          </linearGradient>
+          <radialGradient id={nodeId} cx="0.5" cy="0.4" r="0.7">
+            <stop offset="0" stopColor="#ffe07a" />
+            <stop offset="1" stopColor="#e0a838" />
+          </radialGradient>
+          <filter id={glowId} x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="0" stdDeviation="1.4" floodColor="#ffcf5e" floodOpacity="0.9" />
+          </filter>
+        </defs>
+
+        {/* central spine */}
+        <line
+          x1={CX}
+          y1={rowYs[0]}
+          x2={CX}
+          y2={rowYs[rowYs.length - 1]}
+          stroke="#475062"
+          strokeOpacity={0.5}
+          strokeWidth={2.5}
+        />
+
+        {tiers.map((tier) => {
+          const y = tier.level === 25 ? rowYs[0] : tier.level === 20 ? rowYs[1] : tier.level === 15 ? rowYs[2] : rowYs[3]
+          const active = tier.left || tier.right
+          const rx = W - pillW
+          return (
+            <g key={tier.level}>
+              {/* connectors center <-> pills */}
+              <line x1={pillW} y1={y} x2={CX - nodeR} y2={y} stroke="#475062" strokeOpacity={0.5} strokeWidth={1.5} />
+              <line x1={CX + nodeR} y1={y} x2={rx} y2={y} stroke="#475062" strokeOpacity={0.5} strokeWidth={1.5} />
+              {/* left pill */}
+              <rect
+                x={0}
+                y={y - pillH / 2}
+                width={pillW}
+                height={pillH}
+                rx={2.5}
+                fill={tier.left ? `url(#${goldId})` : '#232b3a'}
+                stroke={tier.left ? '#ffe6a3' : '#3c4658'}
+                strokeWidth={1}
+                filter={tier.left ? `url(#${glowId})` : undefined}
+              />
+              {/* right pill */}
+              <rect
+                x={rx}
+                y={y - pillH / 2}
+                width={pillW}
+                height={pillH}
+                rx={2.5}
+                fill={tier.right ? `url(#${goldId})` : '#232b3a'}
+                stroke={tier.right ? '#ffe6a3' : '#3c4658'}
+                strokeWidth={1}
+                filter={tier.right ? `url(#${glowId})` : undefined}
+              />
+              {/* central level node */}
+              <circle
+                cx={CX}
+                cy={y}
+                r={nodeR}
+                fill={active ? `url(#${nodeId})` : '#1b2230'}
+                stroke={active ? '#ffe6a3' : '#56627a'}
+                strokeWidth={1}
+              />
+              <text
+                x={CX}
+                y={y + 2.6}
+                textAnchor="middle"
+                fontFamily="Arial, sans-serif"
+                fontSize={7}
+                fontWeight={700}
+                fill={active ? '#3a2c08' : '#aab4c6'}
+              >
+                {tier.level}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
     </div>
   )
 }
@@ -299,28 +431,36 @@ export function PlayerCard(props: { player: PlayerData; mirrored?: boolean }) {
         mirrored={mirrored}
       />
 
-      {/* Middle: HP/MP bars + Abilities + TP + Neutral crafting */}
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
+      {/* Middle: HP/MP bars, then a two-row block (skills / TP+neutral) with the
+          talent tree below the MP bar hugging the inner side toward the items. */}
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         {/* HP & MP bars - full width */}
         <div className="flex flex-col gap-0.5">
           <HealthBar current={player.hp} max={player.hpMax} />
           <ManaBar current={player.mana} max={player.manaMax} />
         </div>
 
-        {/* Abilities + spacer + TP + Neutral crafting row */}
-        <div className={`flex ${flexDir} items-center gap-1`}>
-          <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} gap-0.5`}>
-            {player.abilities.map((ab) => (
-              <AbilityIcon key={ab.abilityKey} ability={ab} />
-            ))}
+        {/* Below MP: skills + TP/neutral block, plus the talent tree. justify-between
+            keeps the skills toward the portrait and pushes the tree against the item
+            grid: left of items (Radiant) / right of items (Dire, via row-reverse). */}
+        <div className={`flex ${flexDir} items-stretch justify-between gap-2`}>
+          <div className="flex flex-col gap-0.5">
+            {/* Row 1: abilities (skills) */}
+            <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} gap-0.5`}>
+              {player.abilities.map((ab) => (
+                <AbilityIcon key={ab.abilityKey} ability={ab} />
+              ))}
+            </div>
+            {/* Row 2: TP + Neutral crafting (Artifact + Enchant), directly under the skills */}
+            <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} items-center gap-1`}>
+              <TpIcon teleport={teleport} />
+              <NeutralCraftingIcons neutralCrafting={player.neutralCrafting} mirrored={mirrored} />
+            </div>
           </div>
-          {/* Spacer - one ability slot width */}
-          <div className="w-9 shrink-0" aria-hidden="true" />
-          {/* TP + Neutral crafting (Artifact + Enchant) */}
-          <div className={`flex ${mirrored ? 'flex-row-reverse' : 'flex-row'} items-center gap-1`}>
-            <TpIcon teleport={teleport} />
-            <NeutralCraftingIcons neutralCrafting={player.neutralCrafting} mirrored={mirrored} />
-          </div>
+
+          {/* Talent tree - two rows tall, below the MP bar, hugging the items.
+              The tree itself is never mirrored; only its position flips. */}
+          <TalentTree talents={player.talents} />
         </div>
       </div>
 
