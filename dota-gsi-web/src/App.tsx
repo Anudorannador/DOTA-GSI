@@ -28,7 +28,13 @@ function isTeamKey(key: string): boolean {
 }
 
 const WS_URL_STORAGE_KEY = 'dota-gsi-web.ws-url'
-const DEFAULT_WS_URL_INPUT = 'ws://localhost:3005'
+
+function defaultWsUrl(): string {
+  const hostname = window.location.hostname || 'localhost'
+  const host = hostname.includes(':') ? `[${hostname}]` : hostname
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${host}:3005`
+}
 
 const wsUrlSchema = z.string().trim().superRefine((val, ctx) => {
   let url: URL
@@ -48,10 +54,17 @@ const wsUrlSchema = z.string().trim().superRefine((val, ctx) => {
 })
 
 function readSavedWsUrl(): string {
+  const fallback = defaultWsUrl()
   const stored = window.localStorage.getItem(WS_URL_STORAGE_KEY)
-  if (!stored) return DEFAULT_WS_URL_INPUT
+  if (!stored) return fallback
   const parsed = wsUrlSchema.safeParse(stored)
-  return parsed.success ? parsed.data : DEFAULT_WS_URL_INPUT
+  if (!parsed.success) return fallback
+  const savedHost = new URL(parsed.data).hostname
+  const pageHost = window.location.hostname
+  const savedIsLocal = savedHost === 'localhost' || savedHost === '127.0.0.1'
+  const pageIsLocal = pageHost === 'localhost' || pageHost === '127.0.0.1'
+  if (savedIsLocal && pageHost && !pageIsLocal) return fallback
+  return parsed.data
 }
 
 function normalizeWsUrlForConnection(input: string): string {
@@ -560,7 +573,7 @@ function App() {
                   className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-slate-500"
                   value={wsUrlInput}
                   onChange={(e) => setWsUrlInput(e.target.value)}
-                  placeholder={DEFAULT_WS_URL_INPUT}
+                  placeholder={defaultWsUrl()}
                   inputMode="url"
                   autoCapitalize="none"
                   autoCorrect="off"
