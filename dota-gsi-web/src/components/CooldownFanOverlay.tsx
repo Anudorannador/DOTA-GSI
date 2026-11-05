@@ -15,26 +15,27 @@ export function CooldownFanOverlay(props: {
   const max =
     typeof props.maxCooldown === 'number' && Number.isFinite(props.maxCooldown) ? props.maxCooldown : 0
 
-  // Requirement: if cd is 0 or invalid -> show original image (no overlay)
-  // Also: if max is invalid -> no overlay.
-  const enabled = cd0 > 0 && max > 0
-  const cd = useSmoothedCooldown(enabled ? cd0 : 0)
+  // Items often send a remaining cooldown and no max. Still show the number.
+  // The pie needs a max; without one, show the number only.
+  const cd = useSmoothedCooldown(cd0 > 0 ? cd0 : 0)
 
-  if (!enabled || cd <= 0) return null
+  if (cd0 <= 0 || cd <= 0) return null
 
-  const ratio = clamp01(cd / max)
-  const deg = ratio * 360
+  const ratio = max > 0 ? clamp01(cd / max) : null
+  const deg = ratio === null ? 0 : ratio * 360
 
   return (
     <div className="absolute inset-0">
-      <div
-        className="absolute inset-0"
-        style={{
-          // Start at 12 o'clock, counter-clockwise.
-          background: `conic-gradient(from 0deg, rgb(0 0 0 / 0.45) 0deg ${deg}deg, rgb(0 0 0 / 0) ${deg}deg 360deg)`,
-          transform: 'scaleX(-1)',
-        }}
-      />
+      {ratio !== null ? (
+        <div
+          className="absolute inset-0"
+          style={{
+            // Start at 12 o'clock, counter-clockwise.
+            background: `conic-gradient(from 0deg, rgb(0 0 0 / 0.45) 0deg ${deg}deg, rgb(0 0 0 / 0) ${deg}deg 360deg)`,
+            transform: 'scaleX(-1)',
+          }}
+        />
+      ) : null}
       <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-white drop-shadow">
         {formatCd(cd)}
       </div>

@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
@@ -21,7 +20,7 @@ use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::{
     io::AsyncWriteExt,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{broadcast, mpsc, Mutex, RwLock},
 };
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
@@ -35,7 +34,8 @@ struct Config {
     #[arg(long, env = "HTTP_PORT", default_value_t = 3005)]
     http_port: u16,
 
-    #[arg(long, env = "GSI_AUTH_TOKEN", default_value = "CHANGE_ME_TO_A_RANDOM_SECRET")]
+    /// Must match gamestate_integration_*.cfg. The old public default is refused.
+    #[arg(long, env = "GSI_AUTH_TOKEN")]
     gsi_auth_token: String,
 
     #[arg(long, env = "SOURCE", default_value = "win-gaming-pc")]
@@ -86,7 +86,7 @@ struct AppState {
     full_tx: broadcast::Sender<String>,
     updates_tx: broadcast::Sender<String>,
     raw_log_tx: Option<mpsc::Sender<Envelope>>,
-    redis_client: Option<redis::Client>,
+    redis: Option<Arc<RedisPublisher>>,
 }
 
 fn now_ts_server_ms() -> i64 {
@@ -95,7 +95,12 @@ fn now_ts_server_ms() -> i64 {
 
 fn utc_date_dir(root: &Path) -> PathBuf {
     let date = OffsetDateTime::now_utc().date();
-    root.join(format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day()))
+    root.join(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    ))
 }
 
 fn default_raw_base_path(raw_dir: &Path) -> anyhow::Result<PathBuf> {
@@ -121,27 +126,35 @@ fn with_part_suffix(base_path: &Path, part: u32) -> PathBuf {
     base_path.with_file_name(new_name)
 }
 
-fn canonicalize_json(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let obj = map
-                .iter()
-                .map(|(k, v)| (k.clone(), canonicalize_json(v)))
-                .collect::<BTreeMap<String, Value>>()
-                .into_iter()
-                .collect::<serde_json::Map<String, Value>>();
-            Value::Object(obj)
-        }
-        Value::Array(arr) => Value::Array(
-            arr.iter().map(canonicalize_json).collect()
-        ),
-        _ => value.clone(),
-    }
+const PUBLIC_DEFAULT_TOKEN: &str = "CHANGE_ME_TO_A_RANDOM_SECRET";
+
+fn token_is_refused(token: &str) -> bool {
+    token.is_empty() || token == PUBLIC_DEFAULT_TOKEN || token == "YOUR_PRIVATE_TOKEN"
 }
 
+fn without_auth(payload: &Value) -> Value {
+    let mut emit = payload.clone();
+    if let Some(obj) = emit.as_object_mut() {
+        obj.remove("auth");
+    }
+    emit
+}
+
+// shortcut: hash ignores provider.timestamp, added, and previously. Those three
+// change on every Dota tick even when the snapshot did not. Clock and cooldowns
+// stay in the hash, so the HUD still moves. A change that exists only inside
+// the delta blocks is not forwarded.
 fn hash_payload(payload: &Value) -> anyhow::Result<[u8; 32]> {
-    let canonical = canonicalize_json(payload);
-    let bytes = serde_json::to_vec(&canonical).context("serialize canonical payload")?;
+    let mut scrubbed = payload.clone();
+    if let Some(obj) = scrubbed.as_object_mut() {
+        obj.remove("added");
+        obj.remove("previously");
+        if let Some(provider) = obj.get_mut("provider").and_then(|v| v.as_object_mut()) {
+            provider.remove("timestamp");
+        }
+    }
+    // serde_json::Map is a BTreeMap unless preserve_order is on, so key order is stable.
+    let bytes = serde_json::to_vec(&scrubbed).context("serialize payload")?;
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();
@@ -182,25 +195,39 @@ fn extract_updates(payload: &Value) -> Option<Value> {
     Some(Value::Object(obj))
 }
 
-async fn redis_publish_payload(state: &AppState, payload_json: &str) {
-    let Some(client) = &state.redis_client else {
-        return;
-    };
+struct RedisPublisher {
+    client: redis::Client,
+    conn: Mutex<Option<redis::aio::MultiplexedConnection>>,
+}
 
-    match client.get_multiplexed_async_connection().await {
-        Ok(conn) => {
-            let mut conn: redis::aio::MultiplexedConnection = conn;
-            let res: redis::RedisResult<i64> = conn
-                .publish(&state.cfg.redis_channel, payload_json)
-                .await;
-            if let Err(e) = res {
-                warn!("redis publish failed: {e}");
+impl RedisPublisher {
+    async fn publish(&self, channel: &str, payload: &str) {
+        let mut guard = self.conn.lock().await;
+        if guard.is_none() {
+            match self.client.get_multiplexed_async_connection().await {
+                Ok(conn) => *guard = Some(conn),
+                Err(e) => {
+                    warn!("redis connect failed: {e}");
+                    return;
+                }
             }
         }
-        Err(e) => {
-            warn!("redis connect failed: {e}");
+        let Some(conn) = guard.as_mut() else {
+            return;
+        };
+        let res: redis::RedisResult<i64> = conn.publish(channel, payload).await;
+        if let Err(e) = res {
+            warn!("redis publish failed: {e}");
+            *guard = None;
         }
     }
+}
+
+async fn redis_publish_payload(state: &AppState, payload_json: &str) {
+    let Some(redis) = &state.redis else {
+        return;
+    };
+    redis.publish(&state.cfg.redis_channel, payload_json).await;
 }
 
 async fn spawn_raw_logger(cfg: &Config) -> anyhow::Result<mpsc::Sender<Envelope>> {
@@ -217,19 +244,12 @@ async fn spawn_raw_logger(cfg: &Config) -> anyhow::Result<mpsc::Sender<Envelope>
         let mut part: u32 = 1;
         let mut current_path = with_part_suffix(&base_path, part);
         let mut bytes_written: u64 = 0;
+        let mut file: Option<tokio::fs::File> = None;
 
         loop {
             let Some(envelope) = rx.recv().await else {
                 break;
             };
-
-            // Ensure dir exists
-            if let Some(parent) = current_path.parent() {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    error!("raw log mkdir failed: {e}");
-                    continue;
-                }
-            }
 
             let line = match serde_json::to_string(&envelope) {
                 Ok(s) => s,
@@ -239,36 +259,54 @@ async fn spawn_raw_logger(cfg: &Config) -> anyhow::Result<mpsc::Sender<Envelope>
                 }
             };
 
-            // Rotate before writing if needed (avoid overshoot too much)
             let projected = bytes_written.saturating_add(line.len() as u64 + 1);
             if bytes_written > 0 && projected >= max_bytes {
                 part = part.saturating_add(1);
                 current_path = with_part_suffix(&base_path, part);
                 bytes_written = 0;
+                file = None;
             }
 
-            match tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&current_path)
-                .await
-            {
-                Ok(mut f) => {
-                    if let Err(e) = f.write_all(line.as_bytes()).await {
-                        error!("raw log write failed: {e}");
+            if file.is_none() {
+                if let Some(parent) = current_path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        error!("raw log mkdir failed: {e}");
                         continue;
                     }
-                    if let Err(e) = f.write_all(b"\n").await {
-                        error!("raw log write failed: {e}");
-                        continue;
-                    }
-                    bytes_written = bytes_written.saturating_add(line.len() as u64 + 1);
                 }
-                Err(e) => {
-                    error!("raw log open failed: {e}");
-                    continue;
+                match tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&current_path)
+                    .await
+                {
+                    Ok(opened) => file = Some(opened),
+                    Err(e) => {
+                        error!("raw log open failed: {e}");
+                        continue;
+                    }
                 }
             }
+
+            let Some(f) = file.as_mut() else {
+                continue;
+            };
+            if let Err(e) = f.write_all(line.as_bytes()).await {
+                error!("raw log write failed: {e}");
+                file = None;
+                continue;
+            }
+            if let Err(e) = f.write_all(b"\n").await {
+                error!("raw log write failed: {e}");
+                file = None;
+                continue;
+            }
+            if let Err(e) = f.flush().await {
+                error!("raw log flush failed: {e}");
+                file = None;
+                continue;
+            }
+            bytes_written = bytes_written.saturating_add(line.len() as u64 + 1);
         }
     });
 
@@ -277,17 +315,22 @@ async fn spawn_raw_logger(cfg: &Config) -> anyhow::Result<mpsc::Sender<Envelope>
 
 async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> impl IntoResponse {
     // Inner returns Result so the outer layer can map errors to status codes uniformly.
-    async fn process_payload(state: &AppState, payload: &Value) -> Result<&'static str, &'static str> {
+    async fn process_payload(
+        state: &AppState,
+        payload: &Value,
+    ) -> Result<&'static str, &'static str> {
         match extract_auth_token(payload) {
             Some(token) if token == state.cfg.gsi_auth_token => {}
-            Some(token) => {
-                warn!("invalid token: {token}");
+            Some(_) => {
+                warn!("rejected gsi auth token");
                 return Err("Unauthorized");
             }
             None => return Err("Unauthorized"),
         }
 
-        let payload_hash = hash_payload(payload).map_err(|e| {
+        // Readers of /state and the websockets never need the shared secret.
+        let emit = without_auth(payload);
+        let payload_hash = hash_payload(&emit).map_err(|e| {
             error!("hash failed: {e}");
             "Bad payload"
         })?;
@@ -300,10 +343,10 @@ async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> im
                 return Ok("duplicate");
             }
             inner.last_payload_hash = Some(payload_hash);
-            inner.current_payload = Some(payload.clone());
+            inner.current_payload = Some(emit.clone());
         }
 
-        let payload_json = serde_json::to_string(payload).map_err(|e| {
+        let payload_json = serde_json::to_string(&emit).map_err(|e| {
             error!("serialize payload failed: {e}");
             "Bad payload"
         })?;
@@ -311,7 +354,7 @@ async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> im
         redis_publish_payload(state, &payload_json).await;
 
         if let Some(tx) = &state.raw_log_tx {
-            let envelope = build_envelope(payload.clone(), &state.cfg.source);
+            let envelope = build_envelope(emit.clone(), &state.cfg.source);
             if let Err(e) = tx.try_send(envelope) {
                 warn!("raw log queue full: {e}");
             }
@@ -319,7 +362,7 @@ async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> im
 
         // Broadcast the full snapshot, plus the added/previously delta when present.
         let _ = state.full_tx.send(payload_json);
-        if let Some(delta) = extract_updates(payload) {
+        if let Some(delta) = extract_updates(&emit) {
             if let Ok(delta_json) = serde_json::to_string(&delta) {
                 let _ = state.updates_tx.send(delta_json);
             }
@@ -330,7 +373,7 @@ async fn ingest(State(state): State<AppState>, Json(payload): Json<Value>) -> im
     }
 
     match process_payload(&state, &payload).await {
-        Ok(_) => (StatusCode::OK, "processed"),
+        Ok(msg) => (StatusCode::OK, msg),
         Err(msg) => {
             let code = if msg == "Unauthorized" {
                 StatusCode::UNAUTHORIZED
@@ -384,6 +427,8 @@ async fn ws_full_task(mut socket: WebSocket, state: AppState) {
                     break;
                 }
             }
+            // shortcut: a client more than 1024 messages behind skips ahead with no resync.
+            // At 10 posts/sec that is about 100s of stall; one local dashboard does not hit it.
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
@@ -407,6 +452,8 @@ async fn ws_updates_task(mut socket: WebSocket, state: AppState) {
                     break;
                 }
             }
+            // shortcut: a client more than 1024 messages behind skips ahead with no resync.
+            // At 10 posts/sec that is about 100s of stall; one local dashboard does not hit it.
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
@@ -419,30 +466,33 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     let cfg = Config::parse();
+    if token_is_refused(&cfg.gsi_auth_token) {
+        anyhow::bail!(
+            "Set GSI_AUTH_TOKEN to a private random string. The public default is refused."
+        );
+    }
 
-    let redis_client = cfg
-        .redis_url
-        .as_deref()
-        .and_then(|url| match redis::Client::open(url) {
-            Ok(c) => Some(c),
+    let redis = match cfg.redis_url.as_deref() {
+        Some(url) => match redis::Client::open(url) {
+            Ok(client) => Some(Arc::new(RedisPublisher {
+                client,
+                conn: Mutex::new(None),
+            })),
             Err(e) => {
                 warn!("redis client init failed: {e}");
                 None
             }
-        });
+        },
+        None => None,
+    };
 
     let raw_log_tx = if cfg.raw_log {
-        Some(
-            spawn_raw_logger(&cfg)
-                .await
-                .context("spawn raw logger")?,
-        )
+        Some(spawn_raw_logger(&cfg).await.context("spawn raw logger")?)
     } else {
         None
     };
@@ -456,7 +506,7 @@ async fn main() -> anyhow::Result<()> {
         full_tx,
         updates_tx,
         raw_log_tx,
-        redis_client,
+        redis,
     };
 
     let app = Router::new()
@@ -474,10 +524,50 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting dota-gsi-server on {addr}");
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .context("bind")?;
+    let listener = tokio::net::TcpListener::bind(addr).await.context("bind")?;
 
     axum::serve(listener, app).await.context("serve")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hash_payload, without_auth};
+
+    #[test]
+    fn hash_ignores_timestamp_and_deltas() {
+        let a = serde_json::json!({
+            "provider": {"name": "Dota 2", "timestamp": 1},
+            "previously": {"map": {"clock_time": 0}},
+            "added": {"map": {"clock_time": 1}},
+            "hero": {"health": 500},
+            "map": {"clock_time": 10}
+        });
+        let b = serde_json::json!({
+            "map": {"clock_time": 10},
+            "hero": {"health": 500},
+            "provider": {"timestamp": 99, "name": "Dota 2"},
+            "previously": {"hero": {"health": 400}},
+            "added": {}
+        });
+        assert_eq!(hash_payload(&a).unwrap(), hash_payload(&b).unwrap());
+
+        let changed = serde_json::json!({
+            "provider": {"name": "Dota 2", "timestamp": 1},
+            "hero": {"health": 499},
+            "map": {"clock_time": 10}
+        });
+        assert_ne!(hash_payload(&a).unwrap(), hash_payload(&changed).unwrap());
+    }
+
+    #[test]
+    fn public_payload_drops_auth() {
+        let value = serde_json::json!({
+            "auth": {"token": "secret"},
+            "map": {"clock_time": 1}
+        });
+        let public = without_auth(&value);
+        assert!(public.get("auth").is_none());
+        assert_eq!(public["map"]["clock_time"], 1);
+    }
 }

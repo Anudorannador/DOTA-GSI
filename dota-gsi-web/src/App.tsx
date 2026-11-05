@@ -47,10 +47,11 @@ const wsUrlSchema = z.string().trim().superRefine((val, ctx) => {
   }
 })
 
-function getInitialWsUrlInput(): string {
+function readSavedWsUrl(): string {
   const stored = window.localStorage.getItem(WS_URL_STORAGE_KEY)
-  if (stored && stored.trim().length > 0) return stored
-  return DEFAULT_WS_URL_INPUT
+  if (!stored) return DEFAULT_WS_URL_INPUT
+  const parsed = wsUrlSchema.safeParse(stored)
+  return parsed.success ? parsed.data : DEFAULT_WS_URL_INPUT
 }
 
 function normalizeWsUrlForConnection(input: string): string {
@@ -192,30 +193,20 @@ function getTeamView(payload: JsonObject, teamKey: string) {
     return null
   }
 
-  const pickSpecialItems = (itemsPlayer: JsonObject | undefined, prefix: 'teleport' | 'neutral') => {
-    if (!itemsPlayer) return [] as Array<{ key: string; name: string | undefined; cooldown: number | undefined; maxCooldown: number | undefined }>
-    const keys = Object.keys(itemsPlayer)
-      .filter((k) => k.startsWith(prefix))
-      .sort(sortByNumberSuffix)
-
-    return keys
-      .map((key) => {
-        const v = asObject(itemsPlayer[key])
-        const name = v ? asString(v.name) : undefined
-        const cooldown = v ? asNumber(v.cooldown) : undefined
-        const maxCooldown = v ? asNumber(v.max_cooldown) : undefined
-        const charges = v ? itemCharges(v) : undefined
-        return { key, name, cooldown, maxCooldown, charges }
-      })
-      .slice(0, 3)
-  }
-
   const pickTeleport0 = (itemsPlayer: JsonObject | undefined) => {
-    const one = pickSpecialItems(itemsPlayer, 'teleport')[0]
-    if (!one) return []
-    if (one.key !== 'teleport0') return []
-    if (one.name === 'empty') return []
-    return [one]
+    const slot = asObject(itemsPlayer?.teleport0)
+    if (!slot) return []
+    const name = asString(slot.name)
+    if (!name || name === 'empty') return []
+    return [
+      {
+        key: 'teleport0',
+        name,
+        cooldown: asNumber(slot.cooldown),
+        maxCooldown: asNumber(slot.max_cooldown),
+        charges: itemCharges(slot),
+      },
+    ]
   }
 
   const playerKeys = heroTeam ? Object.keys(heroTeam).sort(sortByNumberSuffix) : []
@@ -243,8 +234,9 @@ function getTeamView(payload: JsonObject, teamKey: string) {
         const slot = asObject(itemsPlayer?.[slotKey])
         const name = slot ? asString(slot.name) : undefined
         const cooldown = slot ? asNumber(slot.cooldown) : undefined
+        const maxCooldown = slot ? asNumber(slot.max_cooldown) : undefined
         const charges = slot ? itemCharges(slot) : undefined
-        return { slotKey, name, cooldown, charges }
+        return { slotKey, name, cooldown, maxCooldown, charges }
       })
 
       const teleports = pickTeleport0(itemsPlayer)
@@ -344,19 +336,16 @@ function App() {
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [reconnectInSec, setReconnectInSec] = useState<number | null>(null)
   const hasEverConnectedRef = useRef(false)
-  const [wsUrlInput, setWsUrlInput] = useState<string>(() => getInitialWsUrlInput())
+  const [wsUrlInput, setWsUrlInput] = useState<string>(readSavedWsUrl)
+  const [activeWsUrl, setActiveWsUrl] = useState<string>(readSavedWsUrl)
   const [wsConfigOpen, setWsConfigOpen] = useState(false)
 
   // Keep the screen awake while this dashboard is open (supported browsers only).
   useScreenWakeLock(true)
 
   const wsUrlParse = useMemo(() => wsUrlSchema.safeParse(wsUrlInput), [wsUrlInput])
-  const wsUrl = useMemo(() => {
-    // If invalid, keep trying to connect to the last saved value (or default).
-    // This keeps the dashboard working while the user edits.
-    const parsed = wsUrlParse.success ? wsUrlParse.data : getInitialWsUrlInput()
-    return normalizeWsUrlForConnection(parsed)
-  }, [wsUrlParse])
+  // The socket follows the saved URL only. A half-typed draft must not reconnect.
+  const wsUrl = useMemo(() => normalizeWsUrlForConnection(activeWsUrl), [activeWsUrl])
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -375,7 +364,13 @@ function App() {
       clearTimers()
       setReconnectInSec(null)
       setWsStatus('connecting')
-      ws = new WebSocket(wsUrl)
+      try {
+        ws = new WebSocket(wsUrl)
+      } catch {
+        setWsStatus('disconnected')
+        if (!closed) startReconnectCountdown(3)
+        return
+      }
       ws.onopen = () => {
         hasEverConnectedRef.current = true
         setReconnectInSec(null)
@@ -454,6 +449,7 @@ function App() {
     const next = wsUrlParse.data
     window.localStorage.setItem(WS_URL_STORAGE_KEY, next)
     setWsUrlInput(next)
+    setActiveWsUrl(next)
     setWsConfigOpen(false)
   }
 
@@ -541,7 +537,13 @@ function App() {
                   : 'Offline'}
           </span>
 
-          <Dialog.Root open={wsConfigOpen} onOpenChange={setWsConfigOpen}>
+          <Dialog.Root
+            open={wsConfigOpen}
+            onOpenChange={(open) => {
+              if (open) setWsUrlInput(activeWsUrl)
+              setWsConfigOpen(open)
+            }}
+          >
             <Dialog.Trigger>
               <Button size="1" variant="soft">WS</Button>
             </Dialog.Trigger>
@@ -549,7 +551,7 @@ function App() {
               <Dialog.Title>WebSocket URL</Dialog.Title>
               <Dialog.Description>
                 Set the WebSocket base URL (e.g. <span className="font-mono">ws://localhost:3005</span>) or a full endpoint
-                (e.g. <span className="font-mono">ws://localhost:3005/ws/full</span>). This is saved locally and takes effect immediately.
+                (e.g. <span className="font-mono">ws://localhost:3005/ws/full</span>). It is saved in this browser and reconnects when you press Save.
               </Dialog.Description>
 
               <div className="mt-4">
