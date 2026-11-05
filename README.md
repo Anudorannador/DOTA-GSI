@@ -34,6 +34,7 @@
 Important:
 
 - The `auth.token` in this file must match `GSI_AUTH_TOKEN` used by the server.
+  Replace `YOUR_PRIVATE_TOKEN`. The server refuses that placeholder.
 - `uri` must point to where this server is reachable. When the game and this
   server run on the same Linux machine, `http://127.0.0.1:3005/` is correct.
   For a separate LAN host, use its IP (e.g. `http://192.168.x.x:3005/`) and
@@ -68,7 +69,7 @@ Important:
     }
     "auth"
     {
-        "token" "90dc54f02b802214408c6620e6052ad7cb1a39ceeeb4ac5c8b40a8e13b9516dd"
+        "token" "YOUR_PRIVATE_TOKEN"
     }
 }
 ```

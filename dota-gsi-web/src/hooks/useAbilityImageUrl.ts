@@ -28,34 +28,26 @@ async function fetchStatus(url: string): Promise<'ok' | 'notFound' | 'unknown'> 
 
 async function resolveAbilityIcon(candidates: string[]): Promise<{ url: string | null; notFound: boolean }> {
   // Sequential probing is intentional (avoid spamming CDN hosts).
+  // notFound only when every host says 404. A timeout or CORS miss must retry.
+  let sawUnknown = false
   for (const url of candidates) {
     const status = await fetchStatus(url)
     if (status === 'ok') return { url, notFound: false }
-    // One explicit 404 is enough to treat the icon as missing.
-    if (status === 'notFound') return { url: null, notFound: true }
-    // If HEAD/GET is blocked (CORS) or flaky, fall back to loading the image.
+    if (status === 'notFound') continue
+    sawUnknown = true
     if (await probeImage(url)) return { url, notFound: false }
   }
 
-  // Exhausted candidates without an explicit 404: unknown, not a hard miss.
-  return { url: null, notFound: false }
+  return { url: null, notFound: !sawUnknown && candidates.length > 0 }
 }
 
-export function useAbilityImageUrl(abilityName: string | undefined, passive: boolean | undefined) {
+export function useAbilityImageUrl(abilityName: string | undefined) {
   return useQuery({
-    queryKey: ['abilityImageUrl', abilityName, passive === true],
+    queryKey: ['abilityImageUrl', abilityName],
     enabled: Boolean(abilityName),
     queryFn: async () => {
       if (!abilityName) return { url: null, notFound: false }
-      const candidates = getAbilityImageCandidates(abilityName)
-      const resolved = await resolveAbilityIcon(candidates)
-
-      // If we cannot resolve an icon, passive abilities should not be shown.
-      // In practice, CORS can prevent us from reading 404 from fetch(), but the icon still won't load.
-      if (!resolved.url && passive === true) {
-        return { url: null, notFound: true }
-      }
-      return resolved
+      return resolveAbilityIcon(getAbilityImageCandidates(abilityName))
     },
     staleTime: 7 * 24 * 60 * 60 * 1000,
     gcTime: 7 * 24 * 60 * 60 * 1000,

@@ -15,6 +15,7 @@ export type ItemSlot = {
   slotKey: string
   name: string | undefined
   cooldown: number | undefined
+  maxCooldown?: number | undefined
   charges?: number | undefined
 }
 
@@ -134,7 +135,7 @@ function HeroPortrait(props: {
 
 function AbilityIcon(props: { ability: Ability }) {
   const { name, cooldown, maxCooldown, passive } = props.ability
-  const imageQuery = useAbilityImageUrl(name, passive)
+  const imageQuery = useAbilityImageUrl(name)
   const url = imageQuery.data?.url ?? undefined
   const notFound = imageQuery.data?.notFound ?? false
 
@@ -233,6 +234,7 @@ function ItemGrid3x3(props: { slots: ItemSlot[] }) {
             <ItemIcon
               name={slot.name}
               cooldown={slot.cooldown}
+              maxCooldown={slot.maxCooldown}
               grayscale={isBackpack}
               count={slot.charges}
             />

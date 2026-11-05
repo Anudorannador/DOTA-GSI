@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 
 const persister = createSyncStoragePersister({
   storage: window.localStorage,
-  key: 'dota-gsi-web.react-query',
+  key: 'dota-gsi-web.react-query.v2',
 })
 
 createRoot(document.getElementById('root')!).render(
